@@ -2,8 +2,8 @@ import os
 import pandas as pd
 import numpy as np
 
-# Define the directory where the CSV file is located
-data_dir = r'C:\Users\alex.britton\Documents\Cursor\Python\PitchOutcomeModel'
+# Define the directory where the CSV file is located update
+data_dir = r'UpdateDirectory'
 
 # Change the current working directory
 os.chdir(data_dir)
