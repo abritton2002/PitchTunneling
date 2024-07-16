@@ -1,6 +1,7 @@
 import os
 import pandas as pd
 import numpy as np
+import matplotlib.pyplot as plt
 
 # Define the directory where the CSV file is located
 data_dir = r'C:\Users\alex.britton\Documents\Cursor\Python\Tunneling'
@@ -15,12 +16,8 @@ print("Current Working Directory:", os.getcwd())
 file_path = os.path.join(data_dir, '7_9_24SPMaster.csv')
 data = pd.read_csv(file_path)
 
-# Ensure 'previous_pitch' column is created
-data['previous_pitch'] = data.sort_values(by=['game_pk', 'at_bat_number', 'pitch_number']).groupby(['game_pk', 'at_bat_number'])['pitch_type'].shift(1)
-data['previous_pitch'] = data['previous_pitch'].fillna('NA')
-
-# Filter out rows where the current pitch and the previous pitch are the same or previous pitch is NA
-data = data[(data['pitch_type'] != data['previous_pitch']) & (data['previous_pitch'] != 'NA')]
+# Debug: Print the number of unique pitchers in the original dataset
+print(f"Number of unique pitchers in the original dataset: {data['player_name'].nunique()}")
 
 # Function to calculate the position of the pitch at time t
 # y is from plate towards pitcher's mound, x is horizontal across mound, and z is up and down
@@ -40,25 +37,29 @@ for index, row in data.iterrows():
 
 data['trajectory'] = trajectories
 
-# Function to find the tunnel point between two trajectories and return the distance from home plate (y-coordinate)
-# Only considering x (horizontal) and z (vertical) coordinates from the batter's perspective
-def find_tunnel_point(trajectory1, trajectory2):
-    for i in range(len(trajectory1)):
-        distance = np.sqrt((trajectory1[i][0] - trajectory2[i][0])**2 + 
-                           (trajectory1[i][2] - trajectory2[i][2])**2)  # x and z coordinates
-        previous_distance = np.sqrt(trajectory1[i][0]**2 + trajectory1[i][2]**2)
-        if previous_distance > 0 and (distance / previous_distance) > 0.17:  # 15% deviation
-            return time_points[i], trajectory1[i], trajectory2[i], 60.5 - trajectory1[i][1]  # Return distance from home plate (y-coordinate)
+# Calculate the average trajectory for each pitcher's fastball
+fastball_data = data[data['pitch_type'] == 'FF']  # Assuming 'FF' is the code for fastball
+average_fastball_trajectories = fastball_data.groupby('player_name')['trajectory'].apply(lambda x: np.mean(np.array(x.tolist()), axis=0))
+
+# Function to find the tunnel point between a pitch and the average fastball trajectory
+def find_tunnel_point(trajectory, average_fastball_trajectory, deviation_threshold=0.10):
+    for i in range(len(trajectory)):
+        distance = np.sqrt((trajectory[i][0] - average_fastball_trajectory[i][0])**2 + 
+                           (trajectory[i][2] - average_fastball_trajectory[i][2])**2)  # x and z coordinates
+        previous_distance = np.sqrt(average_fastball_trajectory[i][0]**2 + average_fastball_trajectory[i][2]**2)
+        if previous_distance > 0 and (distance / previous_distance) > deviation_threshold:  # Deviation threshold
+            return time_points[i], trajectory[i], average_fastball_trajectory[i], 60.5 - trajectory[i][1]  # Return distance from home plate (y-coordinate)
     return None, None, None, None
 
-# Find the tunnel point for each pair of consecutive pitches
+# Calculate the tunnel point for each pitch in reference to the average fastball trajectory
 tunnel_points = []
 
 for index, row in data.iterrows():
-    if index > 0 and index < len(data) and data.iloc[index]['game_pk'] == data.iloc[index - 1]['game_pk'] and data.iloc[index]['at_bat_number'] == data.iloc[index - 1]['at_bat_number']:
-        trajectory1 = data.iloc[index - 1]['trajectory']
-        trajectory2 = row['trajectory']
-        tunnel_point = find_tunnel_point(trajectory1, trajectory2)
+    player_name = row['player_name']
+    if player_name in average_fastball_trajectories.index:
+        average_fastball_trajectory = average_fastball_trajectories[player_name]
+        trajectory = row['trajectory']
+        tunnel_point = find_tunnel_point(trajectory, average_fastball_trajectory)
         tunnel_points.append(tunnel_point)
     else:
         tunnel_points.append((None, None, None, None))
@@ -66,29 +67,57 @@ for index, row in data.iterrows():
 data['tunnel_point'] = tunnel_points
 
 # Extract the distance from home plate (y-coordinate) from the tunnel points
-data['tunnel_distance_feet'] = data['tunnel_point'].apply(lambda x: x[3] if x[3] is not None else 0)
+data['tunnel_distance_feet'] = data['tunnel_point'].apply(lambda x: x[3] if x[3] is not None else np.nan)
 
-# Ensure tunnel distances are within the valid range and greater than zero
-data = data[(data['tunnel_distance_feet'] <= 60.5) & (data['tunnel_distance_feet'] > 0)]
+# Drop rows with NaN values in the tunnel_distance_feet column
+data = data.dropna(subset=['tunnel_distance_feet'])
 
-# Sort the data by tunnel distance in feet in ascending order to get the least tunnel distances
-sorted_data = data.sort_values(by='tunnel_distance_feet', ascending=True)
+# Calculate the number of unique pitch trajectories for each pitcher
+unique_pitch_trajectories = data.groupby('player_name')['pitch_type'].nunique().reset_index()
+unique_pitch_trajectories = unique_pitch_trajectories.rename(columns={'pitch_type': 'unique_pitch_trajectories'})
 
-# Display the ten smallest tunnel points with player_name
-print("Ten smallest tunnel points:")
-print(sorted_data[['player_name', 'previous_pitch', 'pitch_type', 'tunnel_distance_feet']].head(10))
+# Filter pitchers with 4 or more unique pitch trajectories
+pitchers_with_4_or_more_trajectories = unique_pitch_trajectories[unique_pitch_trajectories['unique_pitch_trajectories'] >= 4]
 
 # Calculate the average tunnel distance for each pitcher
 average_tunnel_distances = data.groupby('player_name')['tunnel_distance_feet'].mean().reset_index()
 average_tunnel_distances = average_tunnel_distances.rename(columns={'tunnel_distance_feet': 'average_tunnel_distance'})
 
-# Sort the average tunnel distances in ascending order to get the pitchers with the lowest average tunnel distance
-average_tunnel_distances = average_tunnel_distances.sort_values(by='average_tunnel_distance', ascending=True)
+# Merge the unique pitch trajectories and average tunnel distances
+pitcher_stats = pd.merge(pitchers_with_4_or_more_trajectories, average_tunnel_distances, on='player_name')
 
 # Calculate the TNL metric (higher value indicates better tunneling ability)
 # TNL = ((60.5 - average_tunnel_distance) / 60.5) * 1000
-average_tunnel_distances['TNL'] = ((60.5 - average_tunnel_distances['average_tunnel_distance']) / 60.5 * 1000).astype(int)
+pitcher_stats['TNL'] = ((60.5 - pitcher_stats['average_tunnel_distance']) / 60.5 * 1000).astype(int)
 
-# Display the average tunnel distances and TNL for each pitcher
-print("\nAverage tunnel distances and TNL for each pitcher:")
-print(average_tunnel_distances)
+# Sort the pitchers by TNL metric in descending order
+pitcher_stats = pitcher_stats.sort_values(by='TNL', ascending=False)
+
+# Display the top 10 pitchers by TNL metric
+top_20_pitchers = pitcher_stats.head(20)
+print("\nTop 10 pitchers by TNL metric:")
+print(top_20_pitchers)
+
+# Visualization: Plot average trajectories for the top 10 pitchers
+plt.figure(figsize=(12, 6))
+for i in range(min(20, len(top_20_pitchers))):
+    player_name = top_20_pitchers.iloc[i]['player_name']
+    average_trajectory = average_fastball_trajectories.loc[player_name]
+    x = [pos[0] for pos in average_trajectory]
+    y = [pos[1] for pos in average_trajectory]
+    z = [pos[2] for pos in average_trajectory]
+    plt.plot(y, z, label=player_name)
+plt.xlabel('Distance from Home Plate (feet)')
+plt.ylabel('Vertical Position (feet)')
+plt.title('Average Fastball Trajectories of the Top 10 Pitchers by TNL')
+plt.legend()
+plt.show()
+
+# Visualization: Plot average tunnel distances for the top 10 pitchers
+plt.figure(figsize=(12, 6))
+plt.barh(top_20_pitchers['player_name'], top_20_pitchers['average_tunnel_distance'], color='skyblue')
+plt.xlabel('Average Tunnel Distance (feet)')
+plt.ylabel('Pitcher')
+plt.title('Average Tunnel Distances for the Top 10 Pitchers by TNL')
+plt.gca().invert_yaxis()
+plt.show()
