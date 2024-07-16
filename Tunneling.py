@@ -26,7 +26,7 @@ data = data[(data['pitch_type'] != data['previous_pitch']) & (data['previous_pit
 # y is from plate towards pitcher's mound, x is horizontal across mound, and z is up and down
 def calculate_position(release_pos_x, release_pos_z, release_extension, vx0, vy0, vz0, ax, ay, az, t):
     x = release_pos_x + vx0 * t + 0.5 * ax * t**2
-    y = 60.5 - (release_extension + vy0 * t + 0.5 * ay * t**2)  # Adjust y to start from 60.5 - release_extension
+    y = 60.5 + (release_extension + vy0 * t + 0.5 * ay * t**2)  # Adjust y to start from 60.5 - release_extension
     z = release_pos_z + vz0 * t + 0.5 * az * t**2
     return x, y, z
 
@@ -47,7 +47,7 @@ def find_tunnel_point(trajectory1, trajectory2):
         distance = np.sqrt((trajectory1[i][0] - trajectory2[i][0])**2 + 
                            (trajectory1[i][2] - trajectory2[i][2])**2)  # x and z coordinates
         previous_distance = np.sqrt(trajectory1[i][0]**2 + trajectory1[i][2]**2)
-        if previous_distance > 0 and (distance / previous_distance) > 0.01:  # 1% deviation
+        if previous_distance > 0 and (distance / previous_distance) > 0.17:  # 15% deviation
             return time_points[i], trajectory1[i], trajectory2[i], 60.5 - trajectory1[i][1]  # Return distance from home plate (y-coordinate)
     return None, None, None, None
 
