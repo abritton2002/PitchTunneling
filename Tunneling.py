@@ -2,8 +2,8 @@ import os
 import pandas as pd
 import numpy as np
 
-# Define the directory where the CSV file is located update
-data_dir = r'UpdateDirectory'
+# Define the directory where the CSV file is located
+data_dir = r'C:\Users\alex.britton\Documents\Cursor\Python\Tunneling'
 
 # Change the current working directory
 os.chdir(data_dir)
@@ -26,7 +26,7 @@ data = data[(data['pitch_type'] != data['previous_pitch']) & (data['previous_pit
 # y is from plate towards pitcher's mound, x is horizontal across mound, and z is up and down
 def calculate_position(release_pos_x, release_pos_z, release_extension, vx0, vy0, vz0, ax, ay, az, t):
     x = release_pos_x + vx0 * t + 0.5 * ax * t**2
-    y = release_extension + vy0 * t + 0.5 * ay * t**2
+    y = 60.5 - (release_extension + vy0 * t + 0.5 * ay * t**2)  # Adjust y to start from 60.5 - release_extension
     z = release_pos_z + vz0 * t + 0.5 * az * t**2
     return x, y, z
 
@@ -45,10 +45,10 @@ data['trajectory'] = trajectories
 def find_tunnel_point(trajectory1, trajectory2):
     for i in range(len(trajectory1)):
         distance = np.sqrt((trajectory1[i][0] - trajectory2[i][0])**2 + 
-                           (trajectory1[i][2] - trajectory2[i][2])**2)  # Only x and z coordinates
+                           (trajectory1[i][2] - trajectory2[i][2])**2)  # x and z coordinates
         previous_distance = np.sqrt(trajectory1[i][0]**2 + trajectory1[i][2]**2)
-        if previous_distance > 0 and (distance / previous_distance) > 0.02:  # 2% deviation
-            return time_points[i], trajectory1[i], trajectory2[i], 60.5 - trajectory1[i][1]  # Return distance from home plate
+        if previous_distance > 0 and (distance / previous_distance) > 0.01:  # 1% deviation
+            return time_points[i], trajectory1[i], trajectory2[i], 60.5 - trajectory1[i][1]  # Return distance from home plate (y-coordinate)
     return None, None, None, None
 
 # Find the tunnel point for each pair of consecutive pitches
@@ -68,30 +68,27 @@ data['tunnel_point'] = tunnel_points
 # Extract the distance from home plate (y-coordinate) from the tunnel points
 data['tunnel_distance_feet'] = data['tunnel_point'].apply(lambda x: x[3] if x[3] is not None else 0)
 
-# Adjust tunnel distances by subtracting the release extension
-data['adjusted_tunnel_distance_feet'] = data['tunnel_distance_feet'] - data['release_extension']
+# Ensure tunnel distances are within the valid range and greater than zero
+data = data[(data['tunnel_distance_feet'] <= 60.5) & (data['tunnel_distance_feet'] > 0)]
 
-# Ensure adjusted tunnel distances are within the valid range and greater than zero
-data = data[(data['adjusted_tunnel_distance_feet'] <= 60.5) & (data['adjusted_tunnel_distance_feet'] > 0)]
+# Sort the data by tunnel distance in feet in ascending order to get the least tunnel distances
+sorted_data = data.sort_values(by='tunnel_distance_feet', ascending=True)
 
-# Sort the data by adjusted tunnel distance in feet in ascending order to get the least tunnel distances
-sorted_data = data.sort_values(by='adjusted_tunnel_distance_feet', ascending=True)
+# Display the ten smallest tunnel points with player_name
+print("Ten smallest tunnel points:")
+print(sorted_data[['player_name', 'previous_pitch', 'pitch_type', 'tunnel_distance_feet']].head(10))
 
-# Display the ten smallest adjusted tunnel points with player_name
-print("Ten smallest adjusted tunnel points:")
-print(sorted_data[['player_name', 'previous_pitch', 'pitch_type', 'adjusted_tunnel_distance_feet']].head(10))
-
-# Calculate the average adjusted tunnel distance for each pitcher
-average_tunnel_distances = data.groupby('player_name')['adjusted_tunnel_distance_feet'].mean().reset_index()
-average_tunnel_distances = average_tunnel_distances.rename(columns={'adjusted_tunnel_distance_feet': 'average_adjusted_tunnel_distance'})
+# Calculate the average tunnel distance for each pitcher
+average_tunnel_distances = data.groupby('player_name')['tunnel_distance_feet'].mean().reset_index()
+average_tunnel_distances = average_tunnel_distances.rename(columns={'tunnel_distance_feet': 'average_tunnel_distance'})
 
 # Sort the average tunnel distances in ascending order to get the pitchers with the lowest average tunnel distance
-average_tunnel_distances = average_tunnel_distances.sort_values(by='average_adjusted_tunnel_distance', ascending=True)
+average_tunnel_distances = average_tunnel_distances.sort_values(by='average_tunnel_distance', ascending=True)
 
 # Calculate the TNL metric (higher value indicates better tunneling ability)
-# TNL = ((60.5 - average_adjusted_tunnel_distance) / 60.5) * 1000
-average_tunnel_distances['TNL'] = ((60.5 - average_tunnel_distances['average_adjusted_tunnel_distance']) / 60.5 * 1000).astype(int)
+# TNL = ((60.5 - average_tunnel_distance) / 60.5) * 1000
+average_tunnel_distances['TNL'] = ((60.5 - average_tunnel_distances['average_tunnel_distance']) / 60.5 * 1000).astype(int)
 
-# Display the average adjusted tunnel distances and TNL for each pitcher
-print("\nAverage adjusted tunnel distances and TNL for each pitcher:")
+# Display the average tunnel distances and TNL for each pitcher
+print("\nAverage tunnel distances and TNL for each pitcher:")
 print(average_tunnel_distances)
