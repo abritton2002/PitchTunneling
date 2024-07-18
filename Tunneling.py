@@ -2,6 +2,7 @@ import os
 import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
+from sklearn.linear_model import LinearRegression
 
 # Define the directory where the CSV file is located
 data_dir = r'C:\Users\alex.britton\Documents\Cursor\Python\Tunneling'
@@ -20,10 +21,9 @@ data = pd.read_csv(file_path)
 print(f"Number of unique pitchers in the original dataset: {data['player_name'].nunique()}")
 
 # Function to calculate the position of the pitch at time t
-# y is from plate towards pitcher's mound, x is horizontal across mound, and z is up and down
 def calculate_position(release_pos_x, release_pos_z, release_extension, vx0, vy0, vz0, ax, ay, az, t):
     x = release_pos_x + vx0 * t + 0.5 * ax * t**2
-    y = 60.5 + (release_extension + vy0 * t + 0.5 * ay * t**2)  # Adjust y to start from 60.5 - release_extension
+    y = (60.5 - release_extension) + (vy0 * t + 0.5 * ay * t**2)  # Adjust y to start from 60.5 - release_extension
     z = release_pos_z + vz0 * t + 0.5 * az * t**2
     return x, y, z
 
@@ -37,87 +37,124 @@ for index, row in data.iterrows():
 
 data['trajectory'] = trajectories
 
-# Calculate the average trajectory for each pitcher's fastball
-fastball_data = data[data['pitch_type'] == 'FF']  # Assuming 'FF' is the code for fastball
-average_fastball_trajectories = fastball_data.groupby('player_name')['trajectory'].apply(lambda x: np.mean(np.array(x.tolist()), axis=0))
+# Calculate the average trajectory for each pitch type for each pitcher
+average_trajectories = data.groupby(['player_name', 'pitch_type'])['trajectory'].apply(lambda x: np.mean(np.array(x.tolist()), axis=0))
 
 # Function to find the tunnel point between a pitch and the average fastball trajectory
-def find_tunnel_point(trajectory, average_fastball_trajectory, deviation_threshold=0.10):
+def find_tunnel_point(trajectory, average_fastball_trajectory, distance_threshold=0.3):
     for i in range(len(trajectory)):
         distance = np.sqrt((trajectory[i][0] - average_fastball_trajectory[i][0])**2 + 
                            (trajectory[i][2] - average_fastball_trajectory[i][2])**2)  # x and z coordinates
-        previous_distance = np.sqrt(average_fastball_trajectory[i][0]**2 + average_fastball_trajectory[i][2]**2)
-        if previous_distance > 0 and (distance / previous_distance) > deviation_threshold:  # Deviation threshold
-            return time_points[i], trajectory[i], average_fastball_trajectory[i], 60.5 - trajectory[i][1]  # Return distance from home plate (y-coordinate)
-    return None, None, None, None
+        if distance >= distance_threshold:  # Distance threshold
+            return trajectory[i][1]  # Return distance from home plate (y-coordinate)
+    return None
 
-# Calculate the tunnel point for each pitch in reference to the average fastball trajectory
-tunnel_points = []
-
-for index, row in data.iterrows():
-    player_name = row['player_name']
-    if player_name in average_fastball_trajectories.index:
-        average_fastball_trajectory = average_fastball_trajectories[player_name]
-        trajectory = row['trajectory']
-        tunnel_point = find_tunnel_point(trajectory, average_fastball_trajectory)
-        tunnel_points.append(tunnel_point)
-    else:
-        tunnel_points.append((None, None, None, None))
-
-data['tunnel_point'] = tunnel_points
-
-# Extract the distance from home plate (y-coordinate) from the tunnel points
-data['tunnel_distance_feet'] = data['tunnel_point'].apply(lambda x: x[3] if x[3] is not None else np.nan)
-
-# Drop rows with NaN values in the tunnel_distance_feet column
-data = data.dropna(subset=['tunnel_distance_feet'])
-
-# Calculate the number of unique pitch trajectories for each pitcher
-unique_pitch_trajectories = data.groupby('player_name')['pitch_type'].nunique().reset_index()
-unique_pitch_trajectories = unique_pitch_trajectories.rename(columns={'pitch_type': 'unique_pitch_trajectories'})
-
-# Filter pitchers with 4 or more unique pitch trajectories
-pitchers_with_4_or_more_trajectories = unique_pitch_trajectories[unique_pitch_trajectories['unique_pitch_trajectories'] >= 4]
+# Drop rows with NaN values in the 'pitch_type' column
+data = data.dropna(subset=['pitch_type'])
 
 # Calculate the average tunnel distance for each pitcher
-average_tunnel_distances = data.groupby('player_name')['tunnel_distance_feet'].mean().reset_index()
-average_tunnel_distances = average_tunnel_distances.rename(columns={'tunnel_distance_feet': 'average_tunnel_distance'})
+tunnel_distances = []
 
-# Merge the unique pitch trajectories and average tunnel distances
-pitcher_stats = pd.merge(pitchers_with_4_or_more_trajectories, average_tunnel_distances, on='player_name')
+for player_name, group in data.groupby('player_name'):
+    fastball_trajectory = average_trajectories[player_name, 'FF'] if ('FF' in average_trajectories[player_name]) else None
+    if fastball_trajectory is not None:
+        distances = []
+        for pitch_type in group['pitch_type'].unique():
+            if pitch_type != 'FF':
+                pitch_trajectory = average_trajectories.get((player_name, pitch_type))
+                if pitch_trajectory is not None:
+                    tunnel_distance = find_tunnel_point(pitch_trajectory, fastball_trajectory)
+                    if tunnel_distance is not None:
+                        distances.append(tunnel_distance)
+        if distances:
+            average_tunnel_distance = np.mean(distances)
+            tunnel_distances.append((player_name, average_tunnel_distance))
 
-# Calculate the TNL metric (higher value indicates better tunneling ability)
-# TNL = ((60.5 - average_tunnel_distance) / 60.5) * 1000
-pitcher_stats['TNL'] = ((60.5 - pitcher_stats['average_tunnel_distance']) / 60.5 * 1000).astype(int)
+# Create a DataFrame for the tunnel distances
+tunnel_distances_df = pd.DataFrame(tunnel_distances, columns=['player_name', 'average_tunnel_distance'])
+
+# Drop rows with NaN values in the average_tunnel_distance column
+tunnel_distances_df = tunnel_distances_df.dropna(subset=['average_tunnel_distance'])
+
+# Normalize the TNL metric so that the highest score is 100
+max_tunnel_distance = tunnel_distances_df['average_tunnel_distance'].max()
+tunnel_distances_df['TNL'] = ((max_tunnel_distance - tunnel_distances_df['average_tunnel_distance']) / max_tunnel_distance * 100).astype(int)
 
 # Sort the pitchers by TNL metric in descending order
-pitcher_stats = pitcher_stats.sort_values(by='TNL', ascending=False)
+tunnel_distances_df = tunnel_distances_df.sort_values(by='TNL', ascending=False)
 
-# Display the top 10 pitchers by TNL metric
-top_20_pitchers = pitcher_stats.head(20)
-print("\nTop 10 pitchers by TNL metric:")
+# Display the top 20 pitchers by TNL metric
+top_20_pitchers = tunnel_distances_df.head(20)
+print("\nTop 20 pitchers by TNL metric:")
 print(top_20_pitchers)
 
-# Visualization: Plot average trajectories for the top 10 pitchers
+# Visualization: Plot average trajectories for the top 20 pitchers
 plt.figure(figsize=(12, 6))
-for i in range(min(20, len(top_20_pitchers))):
-    player_name = top_20_pitchers.iloc[i]['player_name']
-    average_trajectory = average_fastball_trajectories.loc[player_name]
-    x = [pos[0] for pos in average_trajectory]
-    y = [pos[1] for pos in average_trajectory]
-    z = [pos[2] for pos in average_trajectory]
-    plt.plot(y, z, label=player_name)
+for player_name in top_20_pitchers['player_name']:
+    for pitch_type, trajectory in average_trajectories[player_name].items():
+        x = [pos[0] for pos in trajectory]
+        y = [pos[1] for pos in trajectory]
+        z = [pos[2] for pos in trajectory]
+        plt.plot(y, z, label=f"{player_name} - {pitch_type}")
+
 plt.xlabel('Distance from Home Plate (feet)')
 plt.ylabel('Vertical Position (feet)')
-plt.title('Average Fastball Trajectories of the Top 10 Pitchers by TNL')
-plt.legend()
+plt.title('Average Pitch Trajectories of the Top 20 Pitchers by TNL')
+plt.legend(bbox_to_anchor=(1.05, 1), loc='upper left')
 plt.show()
 
-# Visualization: Plot average tunnel distances for the top 10 pitchers
+# Visualization: Plot average tunnel distances for the top 20 pitchers
 plt.figure(figsize=(12, 6))
 plt.barh(top_20_pitchers['player_name'], top_20_pitchers['average_tunnel_distance'], color='skyblue')
 plt.xlabel('Average Tunnel Distance (feet)')
 plt.ylabel('Pitcher')
-plt.title('Average Tunnel Distances for the Top 10 Pitchers by TNL')
+plt.title('Average Tunnel Distances for the Top 20 Pitchers by TNL')
 plt.gca().invert_yaxis()
+plt.show()
+
+# Create a linear regression model to predict TNL score based on tunnel distance
+X = tunnel_distances_df[['average_tunnel_distance']]
+y = tunnel_distances_df['TNL']
+
+model = LinearRegression()
+model.fit(X, y)
+
+# Predict TNL scores
+tunnel_distances_df['predicted_TNL'] = model.predict(X)
+
+# Define percentiles for categories
+percentiles = pd.qcut(tunnel_distances_df['predicted_TNL'], q=[0, 0.1, 0.25, 0.75, 1.0], labels=['Below Average', 'Average', 'Above Average', 'Elite'])
+
+# Apply the categorization
+tunnel_distances_df['Category'] = percentiles
+
+# Display the DataFrame with predicted TNL scores and categories
+print("\nDataFrame with Predicted TNL Scores and Categories:")
+print(tunnel_distances_df)
+
+# Write the DataFrame to a CSV file
+output_file_path = os.path.join(data_dir, 'tunnel_distances.csv')
+tunnel_distances_df.to_csv(output_file_path, index=False)
+print(f"\nDataFrame written to {output_file_path}")
+
+# Visualization: Plot actual vs predicted TNL scores
+plt.figure(figsize=(12, 6))
+
+# Visualization: Plot actual vs predicted TNL scores
+plt.figure(figsize=(12, 6))
+plt.scatter(tunnel_distances_df['average_tunnel_distance'], tunnel_distances_df['TNL'], color='blue', label='Actual TNL')
+plt.plot(tunnel_distances_df['average_tunnel_distance'], tunnel_distances_df['predicted_TNL'], color='red', label='Predicted TNL')
+plt.xlabel('Average Tunnel Distance (feet)')
+plt.ylabel('TNL Score')
+plt.title('Actual vs Predicted TNL Scores')
+plt.legend()
+plt.show()
+
+# Visualization: Plot TNL categories
+plt.figure(figsize=(12, 6))
+category_counts = tunnel_distances_df['Category'].value_counts()
+plt.bar(category_counts.index, category_counts.values, color=['gray', (205/255, 127/255, 50/255), 'silver', 'gold'])
+plt.xlabel('Category')
+plt.ylabel('Number of Pitchers')
+plt.title('Distribution of Pitchers by TNL Category')
 plt.show()
