@@ -3,19 +3,30 @@ import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
 from sklearn.linear_model import LinearRegression
+# import pymysql  # Remove this import if no longer needed
 
-# Define the directory where the CSV file is located
-data_dir = r'C:\Users\alex.britton\Documents\Cursor\Python\Tunneling'
+# Database connection details
+# db_config = {
+#     'host': '10.200.200.107',
+#     'user': 'readonlyuser',
+#     'password': 'pKufhAALb7r9Z0x',
+#     'database': 'statcast_db'
+# }
 
-# Change the current working directory
-os.chdir(data_dir)
+# Connect to the database
+# connection = pymysql.connect(**db_config)
 
-# Print the current working directory to confirm the change
-print("Current Working Directory:", os.getcwd())
+# Query to fetch data from the table starting from April 1st, 2024
+# query = """
+# SELECT * 
+# FROM sc_raw 
+# WHERE game_date >= '2024-04-01'
+# """
+# ... existing code ...
+data = pd.read_csv(r'C:\Users\alex.britton\Documents\Cursor\Python\Statcast_Pull\statcast_data_daily.csv')  # Update with the correct path to your CSV file
 
-# Load the 7_9_24SPMaster.csv dataset
-file_path = os.path.join(data_dir, '7_9_24SPMaster.csv')
-data = pd.read_csv(file_path)
+# Close the database connection
+# connection.close()
 
 # Debug: Print the number of unique pitchers in the original dataset
 print(f"Number of unique pitchers in the original dataset: {data['player_name'].nunique()}")
@@ -41,7 +52,7 @@ data['trajectory'] = trajectories
 average_trajectories = data.groupby(['player_name', 'pitch_type'])['trajectory'].apply(lambda x: np.mean(np.array(x.tolist()), axis=0))
 
 # Function to find the tunnel point between a pitch and the average fastball trajectory
-def find_tunnel_point(trajectory, average_fastball_trajectory, distance_threshold=0.3):
+def find_tunnel_point(trajectory, average_fastball_trajectory, distance_threshold=0.25):
     for i in range(len(trajectory)):
         distance = np.sqrt((trajectory[i][0] - average_fastball_trajectory[i][0])**2 + 
                            (trajectory[i][2] - average_fastball_trajectory[i][2])**2)  # x and z coordinates
@@ -132,13 +143,13 @@ tunnel_distances_df['Category'] = percentiles
 print("\nDataFrame with Predicted TNL Scores and Categories:")
 print(tunnel_distances_df)
 
-# Write the DataFrame to a CSV file
+# Define the directory to save the output file
+data_dir = r'C:\Users\alex.britton\Documents\Cursor\Python\Tunneling'  # Ensure this directory exists or create it
 output_file_path = os.path.join(data_dir, 'tunnel_distances.csv')
+
+# Save the DataFrame to a CSV file
 tunnel_distances_df.to_csv(output_file_path, index=False)
 print(f"\nDataFrame written to {output_file_path}")
-
-# Visualization: Plot actual vs predicted TNL scores
-plt.figure(figsize=(12, 6))
 
 # Visualization: Plot actual vs predicted TNL scores
 plt.figure(figsize=(12, 6))
